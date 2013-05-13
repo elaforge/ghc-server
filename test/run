@@ -1,0 +1,13 @@
+#!/bin/zsh
+
+rm -f src/*.(o|hi)(N) build/*(N)
+PATH=..:$PATH
+
+function c() {
+    ghc-fe -c -threaded -isrc -outputdir build -osuf .hs.o $1
+}
+export GHC_SERVER_VERBOSITY=2
+
+c src/B.hs &
+c src/A1.hs
+c src/A.hs

@@ -1,0 +1,102 @@
+SOONER
+  - It seems like long compiles are blocking other compiles?
+    Namely, Cmd.hs, but maybe it's just not very parallel there.
+  - EOF from distributor problem
+
+  - Test with shakefile.
+  - Restart when given different static flags, so I don't have to rely on the
+    shutdown timeout.  Or can I start another distributor?  I think I need to
+    allocate another socket then.
+  - Unix sockets probably don't work on windows.  I should use a port number
+    socket, but can I do a local one so that the firewall software doesn't
+    freak out?
+
+
+
+Use ghc api to compile a given module and keep its info in memory.
+
+HscEnv - keeps cache info, stored in a GhcMonad.Session
+
+Hint:
+  loadModules -> doLoad
+  doLoad:
+    GHC.setTargets
+    GHC.load GHC.LoadAllTargets
+    GHC.load is GhcMake.load
+
+GhcMake:
+  load -> load2: this appears to do the dependency chasing, I don't think I
+  need that, but let's see how it compiles.
+  upsweep -> upsweep_mod mod ->
+    fix dflags hscTarget
+    if stable -> return entry from old hpt
+    stable, no entry -> compile_it (Just linkable) SourceUnmodifiedAndStable
+    .o exists -> reload .hi, return it
+    otherwise -> compile_it Nothing SourceModified
+
+    compile_it:
+      compile hsc_env summary' mod_index nmods mb_old_ifec mb_linkable
+          src_modified
+      winds up being:
+      DriverPipeline.compile hsc_env summary' mod_index nmods
+          Nothing Nothing SourceModified
+
+    "stable" means the module doesn't need recompilation:
+      all stable imports && old linkable does not exist or == on-disk .o
+      &&  date(on-disk .o) > date(.hs)
+
+  What's HomePackageTable?  upsweep takes it, looks like cache info
+
+DriverPipeline:
+  compile is under the compilation manager, so it doesn't use -o.
+  compile hsc_env summary' mod_index nmods Nothing Nothing SourceModified
+
+  compileFile uses outputFile
+    oneShot, and exported
+  called by ghc/Main.hs
+
+
+  I think I want HscMain.hscCompileBatch, that's what has the
+  "Compiling [...]" msg.
+  compile gives default args to compile'
+
+Check out Main.doMake, which runs --make
+
+-o flag is outputFile dflags
+-c sets stopBeforeMode StopLn and '-no-link'
+
+Main:
+  plain batch compile is StopBefore (p :: Phase) -> oneShot hsc_env p srcs
+  Phase I think should be As assembler, but -c sets StopLn
+
+  Mode: Right (Right mode) -> main' mode
+  -c -> Right (Right (StopBefore StopLn))
+  -S -> As
+
+
+What I want is to keep the HscEnv around like --make, but not invoke any of
+the dep analysis, and specifically to use compileFile so it pays attention to
+outputFile.
+
+So see what --make does first:
+  DoMake -> doMake srcs
+  StopBefore StopLn -> oneShot hsc_env StopLn srcs
+
+  doMake:
+    sets targets and calls GHC.load LoadAllTargets, but that's the part that
+    ignores outputFile.
+    So:
+
+    compileFile hsc_env StopLn src
+      but preserve hsc_env, and do 'load's thing where I put loaded stuff into
+      hsc_env
+
+      According to HscEnv, the HPT (HomePackageTable) is not loaded by
+      compileFile, but it implies the others are.
+
+So:
+
+Instance of calling compile myself, can I do it at the 'load' level?  That has
+the code to detect unneeded compiles and load interfaces.
+
+GhcMake.load (LoadUpTo ModuleName)
